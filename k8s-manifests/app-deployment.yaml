@@ -34,6 +34,7 @@ spec:
       containers:
       - name: netflix-app
         image: IMAGE_PLACEHOLDER
+        imagePullPolicy: Always
 
         resources:
           requests:
@@ -44,18 +45,18 @@ spec:
             memory: 512Mi
 
         ports:
-        - containerPort: 3000
+        - containerPort: 80
 
         readinessProbe:
           httpGet:
             path: /
-            port: 3000
+            port: 80
           initialDelaySeconds: 5
           periodSeconds: 10
 
         livenessProbe:
           httpGet:
             path: /
-            port: 3000
+            port: 80
           initialDelaySeconds: 15
           periodSeconds: 20

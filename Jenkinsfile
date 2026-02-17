@@ -9,23 +9,28 @@ pipeline {
         timestamps()
         disableConcurrentBuilds()
         buildDiscarder(logRotator(numToKeepStr: '20'))
-        ansiColor('xterm')
     }
 
     environment {
 
-        /* ---------- Build ---------- */
-        DOCKER_BUILDKIT   = "1"
+        /* ===================================================== */
+        /* BUILD CONFIGURATION                                   */
+        /* ===================================================== */
+        DOCKER_BUILDKIT = "1"
 
-        /* ---------- Sonar ---------- */
+        /* ===================================================== */
+        /* SONARQUBE SETTINGS                                    */
+        /* ===================================================== */
         SCANNER_HOME      = tool 'sonar-scanner'
         SONAR_PROJECT_KEY = "Netflix-app"
         SONAR_HOST_URL    = "http://sonarqube.company.com"
 
-        /* ---------- Docker ---------- */
-        DOCKER_USER       = "iamsubbu3"
-        DOCKER_IMAGE      = "netflix-app"
-        REGISTRY_CRED     = "docker-credentials"
+        /* ===================================================== */
+        /* DOCKER SETTINGS                                       */
+        /* ===================================================== */
+        DOCKER_USER   = "iamsubbu3"
+        DOCKER_IMAGE  = "netflix-app"
+        REGISTRY_CRED = "docker-credentials"
 
         /* Semantic Versioning */
         MAJOR_VERSION = "1"
@@ -36,12 +41,16 @@ pipeline {
         FULL_IMAGE   = "${DOCKER_USER}/${DOCKER_IMAGE}:${DOCKER_TAG}"
         LATEST_IMAGE = "${DOCKER_USER}/${DOCKER_IMAGE}:latest"
 
-        /* ---------- Kubernetes ---------- */
+        /* ===================================================== */
+        /* KUBERNETES / EKS SETTINGS                             */
+        /* ===================================================== */
         AWS_REGION    = "us-east-1"
         EKS_CLUSTER   = "subbu-cluster"
         K8S_NAMESPACE = "subbu-1-ns"
 
-        /* ---------- Notifications ---------- */
+        /* ===================================================== */
+        /* NOTIFICATIONS                                         */
+        /* ===================================================== */
         NOTIFY_EMAIL = "subramanyam9979@gmail.com"
     }
 
@@ -51,24 +60,22 @@ pipeline {
 
     stages {
 
+        /* ===================================================== */
+        /* STAGE 1 — CHECKOUT SOURCE CODE                        */
+        /* ===================================================== */
         stage('Checkout') {
             steps {
-                echo "\u001B[1;34m====================================================\u001B[0m"
-                echo "\u001B[1;36m📥 CHECKOUT STARTED\u001B[0m"
-                echo "\u001B[1;34m====================================================\u001B[0m"
-
                 cleanWs()
                 git branch: 'master',
                     url: 'https://github.com/iamsubbu3/Netflix-Clone-Devops-Project.git'
             }
         }
 
+        /* ===================================================== */
+        /* STAGE 2 — SONARQUBE STATIC ANALYSIS                   */
+        /* ===================================================== */
         stage('SonarQube Scan') {
             steps {
-                echo "\u001B[1;34m====================================================\u001B[0m"
-                echo "\u001B[1;36m🔎 SONARQUBE SCAN STARTED\u001B[0m"
-                echo "\u001B[1;34m====================================================\u001B[0m"
-
                 withSonarQubeEnv('sonar') {
                     sh """
                         ${SCANNER_HOME}/bin/sonar-scanner \
@@ -80,24 +87,22 @@ pipeline {
             }
         }
 
+        /* ===================================================== */
+        /* STAGE 3 — SONAR QUALITY GATE                          */
+        /* ===================================================== */
         stage('Quality Gate') {
             steps {
-                echo "\u001B[1;34m====================================================\u001B[0m"
-                echo "\u001B[1;36m✅ QUALITY GATE CHECK\u001B[0m"
-                echo "\u001B[1;34m====================================================\u001B[0m"
-
                 timeout(time: 5, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
             }
         }
 
+        /* ===================================================== */
+        /* STAGE 4 — DOCKER BUILD                                */
+        /* ===================================================== */
         stage('Docker Build') {
             steps {
-                echo "\u001B[1;34m====================================================\u001B[0m"
-                echo "\u001B[1;36m🐳 DOCKER BUILD STARTED\u001B[0m"
-                echo "\u001B[1;34m====================================================\u001B[0m"
-
                 script {
                     docker.build(
                         FULL_IMAGE,
@@ -108,12 +113,11 @@ pipeline {
             }
         }
 
+        /* ===================================================== */
+        /* STAGE 5 — TRIVY SECURITY SCAN                         */
+        /* ===================================================== */
         stage('Trivy Security Scan') {
             steps {
-                echo "\u001B[1;34m====================================================\u001B[0m"
-                echo "\u001B[1;36m🛡️ TRIVY SCAN STARTED\u001B[0m"
-                echo "\u001B[1;34m====================================================\u001B[0m"
-
                 script {
                     sh "trivy image --severity LOW,MEDIUM,HIGH ${FULL_IMAGE}"
                     sh "trivy image --exit-code 1 --severity CRITICAL ${FULL_IMAGE}"
@@ -124,17 +128,15 @@ pipeline {
             }
         }
 
+        /* ===================================================== */
+        /* STAGE 6 — DOCKER PUSH                                 */
+        /* ===================================================== */
         stage('Docker Push Image') {
             steps {
-                echo "\u001B[1;34m====================================================\u001B[0m"
-                echo "\u001B[1;36m📦 DOCKER PUSH STARTED\u001B[0m"
-                echo "\u001B[1;34m====================================================\u001B[0m"
-
                 script {
                     withDockerRegistry(
                         [credentialsId: REGISTRY_CRED, url: 'https://index.docker.io/v1/']
                     ) {
-
                         sh "docker push ${FULL_IMAGE}"
                         sh "docker tag ${FULL_IMAGE} ${LATEST_IMAGE}"
                         sh "docker push ${LATEST_IMAGE}"
@@ -143,13 +145,12 @@ pipeline {
             }
         }
 
-        /*
+        /* ===================================================== */
+        /* STAGE 7 — DEPLOY TO EKS (AUTO ROLLBACK)               */
+        /* ===================================================== */
+
         stage('Deploy to EKS (Auto Rollback Enabled)') {
             steps {
-                echo "\u001B[1;34m====================================================\u001B[0m"
-                echo "\u001B[1;36m🚀 DEPLOY TO EKS STARTED\u001B[0m"
-                echo "\u001B[1;34m====================================================\u001B[0m"
-
                 dir('k8s-manifests') {
                     withCredentials([
                         aws(
@@ -165,6 +166,13 @@ pipeline {
                               --name ${EKS_CLUSTER}
                         """
 
+        /* --------- Apply base resources --------- */
+
+                        sh "kubectl apply -f . -n ${K8S_NAMESPACE}"
+
+
+        /* --------- Update deployment image safely --------- */
+
                         script {
                             try {
                                 sh """
@@ -173,12 +181,14 @@ pipeline {
                                       -n ${K8S_NAMESPACE}
                                 """
 
+                    /* Verify rollout */
+
                                 sh """
                                     kubectl rollout status deployment/netflix-deployment \
                                       -n ${K8S_NAMESPACE} \
                                       --timeout=180s
                                 """
-
+                    
                             } catch (err) {
 
                                 sh """
@@ -198,9 +208,11 @@ pipeline {
                 }
             }
         }
-        */
     }
 
+    /* ===================================================== */
+    /* POST BUILD ACTIONS                                    */
+    /* ===================================================== */
     post {
 
         success {
