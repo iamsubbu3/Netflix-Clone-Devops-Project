@@ -11,6 +11,7 @@ pipeline {
     }
 
     environment {
+
         /* ---------- Build ---------- */
         DOCKER_BUILDKIT      = "1"
 
@@ -87,87 +88,88 @@ pipeline {
         }
 
         /* ===================================================== */
-        stage('Docker Build') {
+        stage('Docker Build & Push') {
             steps {
                 script {
-                    echo "🐳 Building Docker image ${FULL_IMAGE}"
-                    docker.build("${FULL_IMAGE}", "--pull .")
+
+                    echo "🐳 Building Docker image: ${FULL_IMAGE}"
+
+                    // Build image once
+                    def myImage = docker.build("${FULL_IMAGE}", "--pull .")
+
+                    // Push to Docker Hub (production style)
+                    docker.withRegistry('https://index.docker.io/v1/', REGISTRY_CRED) {
+
+                        echo "📦 Pushing immutable tag: ${DOCKER_TAG}"
+                        myImage.push()
+
+                        echo "🏷️ Pushing latest tag"
+                        myImage.push('latest')
+                    }
+
+                    // Cleanup ONLY images created in this build
+                    echo "🧹 Removing pipeline-built images..."
+                    sh """
+                        docker rmi ${FULL_IMAGE} || true
+                        docker rmi ${LATEST_IMAGE} || true
+                    """
                 }
             }
         }
 
-        // /* ===================================================== */
-        // stage('Trivy Security Scan') {
-        //     steps {
-        //         script {
-        //             echo "🔍 Running Trivy scan..."
+        /* ===================================================== */
+        stage('Trivy Security Scan') {
+            steps {
+                script {
+                    echo "🔍 Running Trivy scan..."
 
-        //             sh "trivy image --severity LOW,MEDIUM,HIGH ${FULL_IMAGE}"
-        //             sh "trivy image --exit-code 1 --severity CRITICAL ${FULL_IMAGE}"
-        //             sh "trivy image --format json -o trivy-report.json ${FULL_IMAGE}"
+                    sh "trivy image --severity LOW,MEDIUM,HIGH ${FULL_IMAGE}"
+                    sh "trivy image --exit-code 1 --severity CRITICAL ${FULL_IMAGE}"
+                    sh "trivy image --format json -o trivy-report.json ${FULL_IMAGE}"
 
-        //             archiveArtifacts artifacts: 'trivy-report.json', fingerprint: true
-        //         }
-        //     }
-        // }
+                    archiveArtifacts artifacts: 'trivy-report.json', fingerprint: true
+                }
+            }
+        }
 
-        // /* ===================================================== */
-        // stage('Docker Push') {
-        //     steps {
-        //         script {
-        //             withDockerRegistry([credentialsId: REGISTRY_CRED, url: 'https://index.docker.io/v1/']) {
+        // =====================================================
+        // OPTIONAL DEPLOY STAGE (Enable when ready)
+        /*
+        stage('Deploy to EKS') {
+            steps {
+                dir('k8s-manifests') {
 
-        //                 echo "📦 Pushing immutable tag: ${FULL_IMAGE}"
-        //                 sh "docker push ${FULL_IMAGE}"
+                    withCredentials([
+                        aws(
+                            credentialsId: 'aws-keys',
+                            accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                            secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+                        )
+                    ]) {
 
-        //                 echo "🏷️ Tagging as latest"
-        //                 sh "docker tag ${FULL_IMAGE} ${LATEST_IMAGE}"
-        //                 sh "docker push ${LATEST_IMAGE}"
-        //             }
-        //         }
-        //     }
-        // }
+                        sh """
+                            aws eks update-kubeconfig \
+                              --region ${AWS_REGION} \
+                              --name ${EKS_CLUSTER_NAME}
+                        """
 
-        // /* ===================================================== */
-        // stage('Deploy to EKS') {
-        //     steps {
-        //         dir('k8s-manifests') {
+                        sh "kubectl apply -f . -n ${K8S_NAMESPACE}"
 
-        //             withCredentials([
-        //                 aws(
-        //                     credentialsId: 'aws-keys',
-        //                     accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-        //                     secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-        //                 )
-        //             ]) {
+                        sh """
+                            kubectl set image deployment/netflix-deployment \
+                              netflix-app=${FULL_IMAGE} \
+                              -n ${K8S_NAMESPACE}
+                        """
 
-        //                 sh """
-        //                     aws eks update-kubeconfig \
-        //                       --region ${AWS_REGION} \
-        //                       --name ${EKS_CLUSTER_NAME}
-        //                 """
-
-        //                 /* Apply base resources */
-
-        //                 sh "kubectl apply -f . -n ${K8S_NAMESPACE}"
-
-
-        //                 /* Update deployment image safely */
-        //                 sh """
-        //                     kubectl set image deployment/netflix-deployment \
-        //                       netflix-app=${FULL_IMAGE} \
-        //                       -n ${K8S_NAMESPACE}
-        //                 """
-
-        //                 /* Verify rollout */
-        //                 sh """
-        //                     kubectl rollout status deployment/netflix-deployment \
-        //                       -n ${K8S_NAMESPACE}
-        //                 """
-        //             }
-        //         }
-        //     }
-        // }
+                        sh """
+                            kubectl rollout status deployment/netflix-deployment \
+                              -n ${K8S_NAMESPACE}
+                        """
+                    }
+                }
+            }
+        }
+        */
     }
 
     /* ===================================================== */
@@ -225,8 +227,7 @@ DevOps Automation
         }
 
         always {
-            echo "🧹 Cleaning Docker cache..."
-            sh "docker image prune -f || true"
+            echo "🧹 Cleanup completed (build images already removed)"
         }
     }
 }
