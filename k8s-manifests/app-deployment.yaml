@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netflix-deployment
+  namespace: subbu-1-ns
+
+spec:
+  replicas: 5
+
+  selector:
+    matchLabels:
+      app: netflix
+
+  template:
+    metadata:
+      labels:
+        app: netflix
+
+    spec:
+
+      # 🔥 Run only on app nodes
+      nodeSelector:
+        role: app
+
+      # 🔥 Spread pods evenly across nodes
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: netflix
+
+      containers:
+      - name: netflix-app
+        image: IMAGE_PLACEHOLDER
+
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+        ports:
+        - containerPort: 3000
+
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 15
+          periodSeconds: 20
