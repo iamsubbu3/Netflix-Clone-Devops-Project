@@ -8,39 +8,41 @@ pipeline {
     options {
         timestamps()
         disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        ansiColor('xterm')
     }
 
     environment {
 
         /* ---------- Build ---------- */
-        DOCKER_BUILDKIT      = "1"
+        DOCKER_BUILDKIT   = "1"
 
-        /* ---------- SonarQube ---------- */
-        SCANNER_HOME         = tool 'sonar-scanner'
-        SONAR_HOST_URL       = 'http://sonarqube.company.com'
-        SONAR_PROJECT_KEY    = 'Netflix-app'
+        /* ---------- Sonar ---------- */
+        SCANNER_HOME      = tool 'sonar-scanner'
+        SONAR_PROJECT_KEY = "Netflix-app"
+        SONAR_HOST_URL    = "http://sonarqube.company.com"
 
         /* ---------- Docker ---------- */
-        DOCKER_USER_NAME     = 'iamsubbu3'
-        DOCKER_IMAGE         = 'netflix-app'
-        REGISTRY_CRED        = 'docker-credentials'
+        DOCKER_USER       = "iamsubbu3"
+        DOCKER_IMAGE      = "netflix-app"
+        REGISTRY_CRED     = "docker-credentials"
 
         /* Semantic Versioning */
-        MAJOR_VERSION        = "1"
-        MINOR_VERSION        = "0"
-        PATCH_VERSION        = "${BUILD_NUMBER}"
+        MAJOR_VERSION = "1"
+        MINOR_VERSION = "0"
+        PATCH_VERSION = "${BUILD_NUMBER}"
 
-        DOCKER_TAG           = "v${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}"
-        FULL_IMAGE           = "${DOCKER_USER_NAME}/${DOCKER_IMAGE}:${DOCKER_TAG}"
-        LATEST_IMAGE         = "${DOCKER_USER_NAME}/${DOCKER_IMAGE}:latest"
+        DOCKER_TAG   = "v${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_VERSION}"
+        FULL_IMAGE   = "${DOCKER_USER}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+        LATEST_IMAGE = "${DOCKER_USER}/${DOCKER_IMAGE}:latest"
 
-        /* ---------- AWS / EKS ---------- */
-        EKS_CLUSTER_NAME     = 'subbu-cluster'
-        AWS_REGION           = 'us-east-1'
-        K8S_NAMESPACE        = 'subbu-1-ns'
+        /* ---------- Kubernetes ---------- */
+        AWS_REGION    = "us-east-1"
+        EKS_CLUSTER   = "subbu-cluster"
+        K8S_NAMESPACE = "subbu-1-ns"
 
         /* ---------- Notifications ---------- */
-        NOTIFY_EMAILS        = 'subramanyam9979@gmail.com'
+        NOTIFY_EMAIL = "subramanyam9979@gmail.com"
     }
 
     triggers {
@@ -50,36 +52,30 @@ pipeline {
     stages {
 
         /* ===================================================== */
-        stage('Clean Workspace') {
+        stage('Checkout') {
             steps {
                 cleanWs()
-            }
-        }
-
-        /* ===================================================== */
-        stage('Checkout Source Code') {
-            steps {
                 git branch: 'master',
                     url: 'https://github.com/iamsubbu3/Netflix-Clone-Devops-Project.git'
             }
         }
 
         /* ===================================================== */
-        stage('SonarQube Analysis') {
+        stage('SonarQube Scan') {
             steps {
                 withSonarQubeEnv('sonar') {
                     sh """
                         ${SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                        -Dsonar.projectName=${SONAR_PROJECT_KEY} \
-                        -Dsonar.sources=.
+                          -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                          -Dsonar.projectName=${SONAR_PROJECT_KEY} \
+                          -Dsonar.sources=.
                     """
                 }
             }
         }
 
         /* ===================================================== */
-        stage('Sonar Quality Gate') {
+        stage('Quality Gate') {
             steps {
                 timeout(time: 5, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
@@ -88,31 +84,16 @@ pipeline {
         }
 
         /* ===================================================== */
-        stage('Docker Build & Push') {
+        stage('Docker Build') {
             steps {
                 script {
+                    echo "🐳 Building ${FULL_IMAGE}"
 
-                    echo "🐳 Building Docker image: ${FULL_IMAGE}"
-
-                    // Build image once
-                    def myImage = docker.build("${FULL_IMAGE}", "--pull .")
-
-                    // Push to Docker Hub (production style)
-                    docker.withRegistry('https://index.docker.io/v1/', REGISTRY_CRED) {
-
-                        echo "📦 Pushing immutable tag: ${DOCKER_TAG}"
-                        myImage.push()
-
-                        echo "🏷️ Pushing latest tag"
-                        myImage.push('latest')
-                    }
-
-                    // Cleanup ONLY images created in this build
-                    echo "🧹 Removing pipeline-built images..."
-                    sh """
-                        docker rmi ${FULL_IMAGE} || true
-                        docker rmi ${LATEST_IMAGE} || true
-                    """
+                    docker.build(
+                        FULL_IMAGE,
+                        "--pull --label build_number=${BUILD_NUMBER} " +
+                        "--label git_commit=${GIT_COMMIT} ."
+                    )
                 }
             }
         }
@@ -125,17 +106,35 @@ pipeline {
 
                     sh "trivy image --severity LOW,MEDIUM,HIGH ${FULL_IMAGE}"
                     sh "trivy image --exit-code 1 --severity CRITICAL ${FULL_IMAGE}"
-                    sh "trivy image --format json -o trivy-report.json ${FULL_IMAGE}"
 
+                    sh "trivy image --format json -o trivy-report.json ${FULL_IMAGE}"
                     archiveArtifacts artifacts: 'trivy-report.json', fingerprint: true
                 }
             }
         }
 
-        // =====================================================
-        // OPTIONAL DEPLOY STAGE (Enable when ready)
+        /* ===================================================== */
+        stage('Docker Push Image') {
+            steps {
+                script {
+                    withDockerRegistry(
+                        [credentialsId: REGISTRY_CRED, url: 'https://index.docker.io/v1/']
+                    ) {
+
+                        echo "📦 Push immutable tag"
+                        sh "docker push ${FULL_IMAGE}"
+
+                        echo "🏷️ Push latest tag"
+                        sh "docker tag ${FULL_IMAGE} ${LATEST_IMAGE}"
+                        sh "docker push ${LATEST_IMAGE}"
+                    }
+                }
+            }
+        }
+
+        /* ===================================================== */
         /*
-        stage('Deploy to EKS') {
+        stage('Deploy to EKS (Auto Rollback Enabled)') {
             steps {
                 dir('k8s-manifests') {
 
@@ -150,21 +149,46 @@ pipeline {
                         sh """
                             aws eks update-kubeconfig \
                               --region ${AWS_REGION} \
-                              --name ${EKS_CLUSTER_NAME}
+                              --name ${EKS_CLUSTER}
                         """
 
-                        sh "kubectl apply -f . -n ${K8S_NAMESPACE}"
+                        script {
+                            try {
 
-                        sh """
-                            kubectl set image deployment/netflix-deployment \
-                              netflix-app=${FULL_IMAGE} \
-                              -n ${K8S_NAMESPACE}
-                        """
+                                echo "🚀 Deploying new image"
 
-                        sh """
-                            kubectl rollout status deployment/netflix-deployment \
-                              -n ${K8S_NAMESPACE}
-                        """
+                                sh """
+                                    kubectl set image deployment/netflix-deployment \
+                                      netflix-app=${FULL_IMAGE} \
+                                      -n ${K8S_NAMESPACE}
+                                """
+
+                                echo "⏳ Waiting for rollout..."
+                                sh """
+                                    kubectl rollout status deployment/netflix-deployment \
+                                      -n ${K8S_NAMESPACE} \
+                                      --timeout=180s
+                                """
+
+                                echo "✅ Deployment successful"
+
+                            } catch (err) {
+
+                                echo "❌ Deployment failed — rolling back..."
+
+                                sh """
+                                    kubectl rollout undo deployment/netflix-deployment \
+                                      -n ${K8S_NAMESPACE}
+                                """
+
+                                sh """
+                                    kubectl rollout status deployment/netflix-deployment \
+                                      -n ${K8S_NAMESPACE}
+                                """
+
+                                error("Deployment failed. Rolled back to previous stable version.")
+                            }
+                        }
                     }
                 }
             }
@@ -201,7 +225,7 @@ ${SONAR_HOST_URL}/dashboard?id=${SONAR_PROJECT_KEY}
 Regards,
 DevOps Automation
 """,
-                to: "${NOTIFY_EMAILS}"
+                to: "${NOTIFY_EMAIL}"
             )
         }
 
@@ -222,7 +246,7 @@ ${BUILD_URL}console
 Regards,
 DevOps Automation
 """,
-                to: "${NOTIFY_EMAILS}"
+                to: "${NOTIFY_EMAIL}"
             )
         }
 
