@@ -44,9 +44,11 @@ pipeline {
         /* ===================================================== */
         /* KUBERNETES / EKS SETTINGS                             */
         /* ===================================================== */
-        AWS_REGION    = "us-east-1"
-        EKS_CLUSTER   = "subbu-cluster"
-        K8S_NAMESPACE = "subbu-1-ns"
+        AWS_REGION     = "us-east-1"
+        EKS_CLUSTER    = "subbu-cluster"
+        K8S_NAMESPACE  = "subbu-1-ns"
+        APP_DEPLOYMENT = "netflix-deployment"
+        APP_CONTAINER  = "netflix-app"
 
         /* ===================================================== */
         /* NOTIFICATIONS                                         */
@@ -106,8 +108,10 @@ pipeline {
                 script {
                     docker.build(
                         FULL_IMAGE,
-                        "--pull --label build_number=${BUILD_NUMBER} " +
-                        "--label git_commit=${GIT_COMMIT} ."
+                        "--pull " +
+                        "--label build_number=${BUILD_NUMBER} " +
+                        "--label git_commit=${GIT_COMMIT} " +
+                        "--label project=${DOCKER_IMAGE} ."
                     )
                 }
             }
@@ -168,7 +172,14 @@ pipeline {
 
         /* --------- Apply base resources --------- */
 
-                        sh "kubectl apply -f . -n ${K8S_NAMESPACE}"
+                        sh "kubectl apply -n ${K8S_NAMESPACE} -f ."
+
+
+        /* --------- Validate Deployment Exists --------- */
+                        sh """
+                            kubectl get deployment ${APP_DEPLOYMENT} \
+                              -n ${K8S_NAMESPACE}
+                        """
 
 
         /* --------- Update deployment image safely --------- */
@@ -176,15 +187,15 @@ pipeline {
                         script {
                             try {
                                 sh """
-                                    kubectl set image deployment/netflix-deployment \
-                                      netflix-app=${FULL_IMAGE} \
+                                    kubectl set image deployment/${APP_DEPLOYMENT} \
+                                      ${APP_CONTAINER}=${FULL_IMAGE} \
                                       -n ${K8S_NAMESPACE}
                                 """
 
                     /* Verify rollout */
 
                                 sh """
-                                    kubectl rollout status deployment/netflix-deployment \
+                                    kubectl rollout status deployment/${APP_DEPLOYMENT} \
                                       -n ${K8S_NAMESPACE} \
                                       --timeout=180s
                                 """
@@ -192,12 +203,12 @@ pipeline {
                             } catch (err) {
 
                                 sh """
-                                    kubectl rollout undo deployment/netflix-deployment \
+                                    kubectl rollout undo deployment/${APP_DEPLOYMENT} \
                                       -n ${K8S_NAMESPACE}
                                 """
 
                                 sh """
-                                    kubectl rollout status deployment/netflix-deployment \
+                                    kubectl rollout status deployment/${APP_DEPLOYMENT} \
                                       -n ${K8S_NAMESPACE}
                                 """
 
@@ -267,7 +278,14 @@ DevOps Automation
         }
 
         always {
-            echo "🧹 Cleanup completed (build images already removed)"
+            echo "🧹 Cleaning only Jenkins built images..."
+
+            sh """
+                docker images --filter "label=project=${DOCKER_IMAGE}" -q | \
+                xargs -r docker rmi -f || true
+            """
+
+            sh "docker image prune -f || true"
         }
     }
 }
