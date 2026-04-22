@@ -22,7 +22,7 @@ pipeline {
         /* SONARQUBE SETTINGS                                    */
         /* ===================================================== */
         SCANNER_HOME      = tool 'sonar-scanner'
-        SONAR_PROJECT_KEY = "Netflix-app"
+        SONAR_PROJECT_KEY = "Netflix-clone-project"
         SONAR_HOST_URL    = "http://sonarqube.company.com"
 
         /* ===================================================== */
